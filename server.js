@@ -30,6 +30,7 @@ async function initDB() {
       to_user TEXT NOT NULL,
       text TEXT NOT NULL,
       time TEXT NOT NULL,
+      status TEXT DEFAULT 'sent',
       created_at TIMESTAMP DEFAULT NOW()
     )
   `);
@@ -45,39 +46,26 @@ const io = new Server(server, {
 
 const onlineUsers = {};
 
-// Register user
 app.post('/register', async (req, res) => {
   const { name, phone } = req.body;
   if (!name || !phone) return res.status(400).json({ error: 'Name and phone required' });
   const userId = 'user_' + Math.random().toString(36).substr(2, 8);
   try {
     const existing = await pool.query('SELECT * FROM users WHERE phone = $1', [phone]);
-    if (existing.rows.length > 0) {
-      return res.json({ user: existing.rows[0] });
-    }
-    const result = await pool.query(
-      'INSERT INTO users (name, phone, user_id) VALUES ($1, $2, $3) RETURNING *',
-      [name, phone, userId]
-    );
+    if (existing.rows.length > 0) return res.json({ user: existing.rows[0] });
+    const result = await pool.query('INSERT INTO users (name, phone, user_id) VALUES ($1, $2, $3) RETURNING *', [name, phone, userId]);
     res.json({ user: result.rows[0] });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Server error' });
-  }
+  } catch (err) { res.status(500).json({ error: 'Server error' }); }
 });
 
-// Search user by phone
 app.get('/search/:phone', async (req, res) => {
   try {
     const result = await pool.query('SELECT id, name, phone, user_id FROM users WHERE phone = $1', [req.params.phone]);
     if (result.rows.length === 0) return res.status(404).json({ error: 'User not found' });
     res.json({ user: result.rows[0] });
-  } catch (err) {
-    res.status(500).json({ error: 'Server error' });
-  }
+  } catch (err) { res.status(500).json({ error: 'Server error' }); }
 });
 
-// Get message history
 app.get('/messages/:userId1/:userId2', async (req, res) => {
   const { userId1, userId2 } = req.params;
   try {
@@ -86,42 +74,47 @@ app.get('/messages/:userId1/:userId2', async (req, res) => {
       [userId1, userId2]
     );
     res.json({ messages: result.rows });
-  } catch (err) {
-    res.status(500).json({ error: 'Server error' });
-  }
+  } catch (err) { res.status(500).json({ error: 'Server error' }); }
 });
 
-// Socket.io
 io.on('connection', (socket) => {
   console.log('Connected:', socket.id);
 
   socket.on('register', (userId) => {
     onlineUsers[userId] = socket.id;
-    console.log('User online:', userId);
+    console.log('Online:', userId);
   });
 
   socket.on('send_message', async (data) => {
-    const { to, from, text, time } = data;
+    const { to, from, text, time, msgId } = data;
     try {
-      await pool.query(
-        'INSERT INTO messages (from_user, to_user, text, time) VALUES ($1, $2, $3, $4)',
-        [from, to, text, time]
+      const result = await pool.query(
+        'INSERT INTO messages (from_user, to_user, text, time, status) VALUES ($1, $2, $3, $4, $5) RETURNING id',
+        [from, to, text, time, 'sent']
       );
-    } catch (err) {
-      console.error('Error saving message:', err);
-    }
-    const recipientSocket = onlineUsers[to];
-    if (recipientSocket) {
-      io.to(recipientSocket).emit('receive_message', { from, text, time });
-    }
+      const dbId = result.rows[0].id;
+      const recipientSocket = onlineUsers[to];
+      if (recipientSocket) {
+        io.to(recipientSocket).emit('receive_message', { from, text, time, msgId: dbId, status: 'delivered' });
+        await pool.query('UPDATE messages SET status = $1 WHERE id = $2', ['delivered', dbId]);
+        const senderSocket = onlineUsers[from];
+        if (senderSocket) io.to(senderSocket).emit('message_status', { msgId, status: 'delivered' });
+      }
+    } catch (err) { console.error('Error:', err); }
+  });
+
+  socket.on('message_read', async (data) => {
+    const { msgId, from } = data;
+    try {
+      await pool.query('UPDATE messages SET status = $1 WHERE id = $2', ['read', msgId]);
+      const senderSocket = onlineUsers[from];
+      if (senderSocket) io.to(senderSocket).emit('message_status', { msgId, status: 'read' });
+    } catch (err) { console.error('Error:', err); }
   });
 
   socket.on('disconnect', () => {
     for (const [userId, socketId] of Object.entries(onlineUsers)) {
-      if (socketId === socket.id) {
-        delete onlineUsers[userId];
-        break;
-      }
+      if (socketId === socket.id) { delete onlineUsers[userId]; break; }
     }
   });
 });
@@ -129,6 +122,4 @@ io.on('connection', (socket) => {
 app.get('/', (req, res) => res.send('Kamba server running!'));
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-  console.log('Kamba server running on port', PORT);
-});
+server.listen(PORT, () => console.log('Kamba server running on port', PORT));
