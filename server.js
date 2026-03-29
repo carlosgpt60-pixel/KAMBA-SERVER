@@ -5,7 +5,7 @@ const cors = require('cors');
 const { Pool } = require('pg');
 
 const app = express();
-app.use(cors());
+app.use(cors({ origin: '*', credentials: true }));
 app.use(express.json());
 
 const pool = new Pool({
@@ -30,10 +30,12 @@ async function initDB() {
       to_user TEXT NOT NULL,
       text TEXT NOT NULL,
       time TEXT NOT NULL,
-      status TEXT DEFAULT 'sent',
       created_at TIMESTAMP DEFAULT NOW()
     )
   `);
+  try {
+    await pool.query(`ALTER TABLE messages ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'sent'`);
+  } catch(e) { console.log('Status column already exists'); }
   console.log('Database ready!');
 }
 
@@ -41,7 +43,9 @@ initDB();
 
 const server = http.createServer(app);
 const io = new Server(server, {
-  cors: { origin: '*', methods: ['GET', 'POST'] }
+  cors: { origin: '*', methods: ['GET', 'POST'], credentials: true },
+  allowEIO3: true,
+  transports: ['polling', 'websocket']
 });
 
 const onlineUsers = {};
@@ -55,7 +59,7 @@ app.post('/register', async (req, res) => {
     if (existing.rows.length > 0) return res.json({ user: existing.rows[0] });
     const result = await pool.query('INSERT INTO users (name, phone, user_id) VALUES ($1, $2, $3) RETURNING *', [name, phone, userId]);
     res.json({ user: result.rows[0] });
-  } catch (err) { res.status(500).json({ error: 'Server error' }); }
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Server error' }); }
 });
 
 app.get('/search/:phone', async (req, res) => {
@@ -87,6 +91,7 @@ io.on('connection', (socket) => {
 
   socket.on('send_message', async (data) => {
     const { to, from, text, time, msgId } = data;
+    console.log(`Message from ${from} to ${to}: ${text}`);
     try {
       const result = await pool.query(
         'INSERT INTO messages (from_user, to_user, text, time, status) VALUES ($1, $2, $3, $4, $5) RETURNING id',
@@ -94,13 +99,14 @@ io.on('connection', (socket) => {
       );
       const dbId = result.rows[0].id;
       const recipientSocket = onlineUsers[to];
+      console.log(`Recipient socket for ${to}:`, recipientSocket);
       if (recipientSocket) {
-        io.to(recipientSocket).emit('receive_message', { from, text, time, msgId: dbId, status: 'delivered' });
+        io.to(recipientSocket).emit('receive_message', { from, text, time, msgId: dbId });
         await pool.query('UPDATE messages SET status = $1 WHERE id = $2', ['delivered', dbId]);
         const senderSocket = onlineUsers[from];
         if (senderSocket) io.to(senderSocket).emit('message_status', { msgId, status: 'delivered' });
       }
-    } catch (err) { console.error('Error:', err); }
+    } catch (err) { console.error('Error saving message:', err); }
   });
 
   socket.on('message_read', async (data) => {
@@ -109,12 +115,12 @@ io.on('connection', (socket) => {
       await pool.query('UPDATE messages SET status = $1 WHERE id = $2', ['read', msgId]);
       const senderSocket = onlineUsers[from];
       if (senderSocket) io.to(senderSocket).emit('message_status', { msgId, status: 'read' });
-    } catch (err) { console.error('Error:', err); }
+    } catch (err) { console.error('Error updating read status:', err); }
   });
 
   socket.on('disconnect', () => {
     for (const [userId, socketId] of Object.entries(onlineUsers)) {
-      if (socketId === socket.id) { delete onlineUsers[userId]; break; }
+      if (socketId === socket.id) { delete onlineUsers[userId]; console.log('Offline:', userId); break; }
     }
   });
 });
