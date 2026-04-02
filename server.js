@@ -92,32 +92,21 @@ app.get('/messages/:userId1/:userId2', async (req, res) => {
     res.json({ messages: result.rows });
   } catch (err) { res.status(500).json({ error: 'Server error' }); }
 });
+
 // Upload audio
 app.post('/upload-audio', upload.single('audio'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
-    console.log('Uploading audio, cloud name:', process.env.CLOUDINARY_CLOUD_NAME);
-    console.log('File size:', req.file.size);
     const stream = cloudinary.uploader.upload_stream(
       { resource_type: 'video', folder: 'kamba-audio', format: 'mp3' },
       (error, result) => {
-        if (error) {
-          console.error('Cloudinary error:', error);
-          return res.status(500).json({ error: error.message });
-        }
+        if (error) return res.status(500).json({ error: 'Upload failed' });
         res.json({ url: result.secure_url });
       }
     );
     Readable.from(req.file.buffer).pipe(stream);
-  } catch (err) {
-    console.error('Upload error:', err);
-    res.status(500).json({ error: 'Server error' });
-  }
+  } catch (err) { res.status(500).json({ error: 'Server error' }); }
 });
-```
-
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log('Kamba server running on port', PORT));
 
 io.on('connection', (socket) => {
   console.log('Connected:', socket.id);
