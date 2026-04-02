@@ -3,10 +3,22 @@ const http = require('http');
 const { Server } = require('socket.io');
 const cors = require('cors');
 const { Pool } = require('pg');
+const cloudinary = require('cloudinary').v2;
+const multer = require('multer');
+const { Readable } = require('stream');
 
 const app = express();
 app.use(cors({ origin: '*', credentials: true }));
 app.use(express.json());
+
+// Cloudinary config
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
+});
+
+const upload = multer({ storage: multer.memoryStorage() });
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_PUBLIC_URL,
@@ -30,12 +42,12 @@ async function initDB() {
       to_user TEXT NOT NULL,
       text TEXT NOT NULL,
       time TEXT NOT NULL,
+      type TEXT DEFAULT 'text',
       created_at TIMESTAMP DEFAULT NOW()
     )
   `);
-  try {
-    await pool.query(`ALTER TABLE messages ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'sent'`);
-  } catch(e) { console.log('Status column already exists'); }
+  try { await pool.query(`ALTER TABLE messages ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'sent'`); } catch(e) {}
+  try { await pool.query(`ALTER TABLE messages ADD COLUMN IF NOT EXISTS type TEXT DEFAULT 'text'`); } catch(e) {}
   console.log('Database ready!');
 }
 
@@ -81,6 +93,21 @@ app.get('/messages/:userId1/:userId2', async (req, res) => {
   } catch (err) { res.status(500).json({ error: 'Server error' }); }
 });
 
+// Upload audio
+app.post('/upload-audio', upload.single('audio'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+    const stream = cloudinary.uploader.upload_stream(
+      { resource_type: 'video', folder: 'kamba-audio', format: 'mp3' },
+      (error, result) => {
+        if (error) return res.status(500).json({ error: 'Upload failed' });
+        res.json({ url: result.secure_url });
+      }
+    );
+    Readable.from(req.file.buffer).pipe(stream);
+  } catch (err) { res.status(500).json({ error: 'Server error' }); }
+});
+
 io.on('connection', (socket) => {
   console.log('Connected:', socket.id);
 
@@ -90,23 +117,22 @@ io.on('connection', (socket) => {
   });
 
   socket.on('send_message', async (data) => {
-    const { to, from, text, time, msgId } = data;
-    console.log(`Message from ${from} to ${to}: ${text}`);
+    const { to, from, text, time, msgId, type } = data;
+    const msgType = type || 'text';
     try {
       const result = await pool.query(
-        'INSERT INTO messages (from_user, to_user, text, time, status) VALUES ($1, $2, $3, $4, $5) RETURNING id',
-        [from, to, text, time, 'sent']
+        'INSERT INTO messages (from_user, to_user, text, time, status, type) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id',
+        [from, to, text, time, 'sent', msgType]
       );
       const dbId = result.rows[0].id;
       const recipientSocket = onlineUsers[to];
-      console.log(`Recipient socket for ${to}:`, recipientSocket);
       if (recipientSocket) {
-        io.to(recipientSocket).emit('receive_message', { from, text, time, msgId: dbId });
+        io.to(recipientSocket).emit('receive_message', { from, text, time, msgId: dbId, type: msgType });
         await pool.query('UPDATE messages SET status = $1 WHERE id = $2', ['delivered', dbId]);
         const senderSocket = onlineUsers[from];
         if (senderSocket) io.to(senderSocket).emit('message_status', { msgId, status: 'delivered' });
       }
-    } catch (err) { console.error('Error saving message:', err); }
+    } catch (err) { console.error('Error:', err); }
   });
 
   socket.on('message_read', async (data) => {
@@ -115,12 +141,12 @@ io.on('connection', (socket) => {
       await pool.query('UPDATE messages SET status = $1 WHERE id = $2', ['read', msgId]);
       const senderSocket = onlineUsers[from];
       if (senderSocket) io.to(senderSocket).emit('message_status', { msgId, status: 'read' });
-    } catch (err) { console.error('Error updating read status:', err); }
+    } catch (err) { console.error('Error:', err); }
   });
 
   socket.on('disconnect', () => {
     for (const [userId, socketId] of Object.entries(onlineUsers)) {
-      if (socketId === socket.id) { delete onlineUsers[userId]; console.log('Offline:', userId); break; }
+      if (socketId === socket.id) { delete onlineUsers[userId]; break; }
     }
   });
 });
