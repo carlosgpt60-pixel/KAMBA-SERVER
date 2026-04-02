@@ -116,12 +116,8 @@ app.post('/upload-audio', upload.single('audio'), async (req, res) => {
 });
 ```
 
-Press **Ctrl + S** then in Command Prompt:
-```
-cd C:\Users\USER\kamba-server
-git add .
-git commit -m "debug audio upload"
-git push origin master
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => console.log('Kamba server running on port', PORT));
 
 io.on('connection', (socket) => {
   console.log('Connected:', socket.id);
