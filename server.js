@@ -73,7 +73,13 @@ app.post('/register', async (req, res) => {
     res.json({ user: result.rows[0] });
   } catch (err) { console.error(err); res.status(500).json({ error: 'Server error' }); }
 });
-
+app.get('/user/:userId', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT id, name, phone, user_id FROM users WHERE user_id = $1', [req.params.userId]);
+    if (result.rows.length === 0) return res.status(404).json({ error: 'User not found' });
+    res.json({ user: result.rows[0] });
+  } catch (err) { res.status(500).json({ error: 'Server error' }); }
+});
 app.get('/search/:phone', async (req, res) => {
   try {
     const result = await pool.query('SELECT id, name, phone, user_id FROM users WHERE phone = $1', [req.params.phone]);
