@@ -83,15 +83,21 @@ app.post('/register', async (req, res) => {
 });
 app.get('/conversations/:userId', async (req, res) => {
   try {
+    const userId = req.params.userId;
     const result = await pool.query(`
-      SELECT DISTINCT ON (other_user) other_user,
-        CASE WHEN from_user = $1 THEN to_user ELSE from_user END as other_user,
+      SELECT CASE WHEN from_user = $1 THEN to_user ELSE from_user END as other_user,
         text as last_message, time, type
       FROM messages
       WHERE from_user = $1 OR to_user = $1
-      ORDER BY other_user, created_at DESC
-    `, [req.params.userId]);
-    const contacts = await Promise.all(result.rows.map(async (row) => {
+      ORDER BY created_at DESC
+    `, [userId]);
+    const seen = new Set();
+    const unique = result.rows.filter(row => {
+      if (seen.has(row.other_user)) return false;
+      seen.add(row.other_user);
+      return true;
+    });
+    const contacts = await Promise.all(unique.map(async (row) => {
       const user = await pool.query('SELECT name, phone, user_id FROM users WHERE user_id = $1', [row.other_user]);
       return user.rows.length > 0 ? { ...user.rows[0], lastMsg: row.last_message, time: row.time, unread: 0 } : null;
     }));
