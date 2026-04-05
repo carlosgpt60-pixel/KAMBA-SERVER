@@ -81,6 +81,23 @@ app.post('/register', async (req, res) => {
     res.json({ user: result.rows[0] });
   } catch (err) { console.error(err); res.status(500).json({ error: 'Server error' }); }
 });
+app.get('/conversations/:userId', async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT DISTINCT ON (other_user) other_user,
+        CASE WHEN from_user = $1 THEN to_user ELSE from_user END as other_user,
+        text as last_message, time, type
+      FROM messages
+      WHERE from_user = $1 OR to_user = $1
+      ORDER BY other_user, created_at DESC
+    `, [req.params.userId]);
+    const contacts = await Promise.all(result.rows.map(async (row) => {
+      const user = await pool.query('SELECT name, phone, user_id FROM users WHERE user_id = $1', [row.other_user]);
+      return user.rows.length > 0 ? { ...user.rows[0], lastMsg: row.last_message, time: row.time, unread: 0 } : null;
+    }));
+    res.json({ contacts: contacts.filter(Boolean) });
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Server error' }); }
+});
 app.get('/user/:userId', async (req, res) => {
   try {
     const result = await pool.query('SELECT id, name, phone, user_id FROM users WHERE user_id = $1', [req.params.userId]);
