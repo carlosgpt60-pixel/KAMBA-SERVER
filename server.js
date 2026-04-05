@@ -81,6 +81,26 @@ app.post('/register', async (req, res) => {
     res.json({ user: result.rows[0] });
   } catch (err) { console.error(err); res.status(500).json({ error: 'Server error' }); }
 });
+app.post('/save-contact', async (req, res) => {
+  const { userId, contactId, name } = req.body;
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS contacts (
+        id SERIAL PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        contact_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        UNIQUE(user_id, contact_id)
+      )
+    `);
+    await pool.query(`
+      INSERT INTO contacts (user_id, contact_id, name) 
+      VALUES ($1, $2, $3) 
+      ON CONFLICT (user_id, contact_id) DO UPDATE SET name = $3
+    `, [userId, contactId, name]);
+    res.json({ success: true });
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Server error' }); }
+});
 app.get('/conversations/:userId', async (req, res) => {
   try {
     const userId = req.params.userId;
@@ -99,7 +119,10 @@ app.get('/conversations/:userId', async (req, res) => {
     });
     const contacts = await Promise.all(unique.map(async (row) => {
       const user = await pool.query('SELECT name, phone, user_id FROM users WHERE user_id = $1', [row.other_user]);
-      return user.rows.length > 0 ? { ...user.rows[0], lastMsg: row.last_message, time: row.time, unread: 0 } : null;
+      if (user.rows.length === 0) return null;
+      const contact = await pool.query('SELECT name FROM contacts WHERE user_id = $1 AND contact_id = $2', [userId, row.other_user]);
+      const displayName = contact.rows.length > 0 ? contact.rows[0].name : user.rows[0].name;
+      return { ...user.rows[0], name: displayName, lastMsg: row.last_message, time: row.time, unread: 0 };
     }));
     res.json({ contacts: contacts.filter(Boolean) });
   } catch (err) { console.error(err); res.status(500).json({ error: 'Server error' }); }
