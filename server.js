@@ -158,7 +158,7 @@ app.post('/upload-audio', upload.single('audio'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
     const stream = cloudinary.uploader.upload_stream(
-      { resource_type: 'video', folder: 'kamba-audio', format: 'mp3' },
+      { resource_type: 'auto', folder: 'kamba-media' },
       (error, result) => {
         if (error) return res.status(500).json({ error: 'Upload failed' });
         res.json({ url: result.secure_url });
