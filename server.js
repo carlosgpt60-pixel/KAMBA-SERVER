@@ -48,6 +48,7 @@ async function initDB() {
   `);
   try { await pool.query(`ALTER TABLE messages ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'sent'`); } catch(e) {}
   try { await pool.query(`ALTER TABLE messages ADD COLUMN IF NOT EXISTS type TEXT DEFAULT 'text'`); } catch(e) {}
+  try { await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS pin TEXT`); } catch(e) {}
   console.log('Database ready!');
 }
 
@@ -67,9 +68,15 @@ app.post('/register', async (req, res) => {
   if (!name || !phone) return res.status(400).json({ error: 'Name and phone required' });
   const userId = 'user_' + Math.random().toString(36).substr(2, 8);
   try {
+    const { pin } = req.body;
+    if (!pin || pin.length !== 4) return res.status(400).json({ error: 'PIN deve ter 4 dígitos' });
     const existing = await pool.query('SELECT * FROM users WHERE phone = $1', [phone]);
-    if (existing.rows.length > 0) return res.json({ user: existing.rows[0] });
-    const result = await pool.query('INSERT INTO users (name, phone, user_id) VALUES ($1, $2, $3) RETURNING *', [name, phone, userId]);
+    if (existing.rows.length > 0) {
+      if (existing.rows[0].pin && existing.rows[0].pin !== pin) return res.status(401).json({ error: 'PIN incorreto' });
+      if (!existing.rows[0].pin) await pool.query('UPDATE users SET pin = $1 WHERE phone = $2', [pin, phone]);
+      return res.json({ user: existing.rows[0] });
+    }
+    const result = await pool.query('INSERT INTO users (name, phone, user_id, pin) VALUES ($1, $2, $3, $4) RETURNING *', [name, phone, userId, pin]);
     res.json({ user: result.rows[0] });
   } catch (err) { console.error(err); res.status(500).json({ error: 'Server error' }); }
 });
