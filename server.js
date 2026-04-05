@@ -70,6 +70,7 @@ app.post('/register', async (req, res) => {
   try {
     const { pin } = req.body;
     if (!pin || pin.length !== 4) return res.status(400).json({ error: 'PIN deve ter 4 dígitos' });
+    if (!/^\d{4}$/.test(pin)) return res.status(400).json({ error: 'PIN deve ter 4 números' });
     const existing = await pool.query('SELECT * FROM users WHERE phone = $1', [phone]);
     if (existing.rows.length > 0) {
       if (existing.rows[0].pin && existing.rows[0].pin !== pin) return res.status(401).json({ error: 'PIN incorreto' });
