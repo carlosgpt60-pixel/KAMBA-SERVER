@@ -157,15 +157,17 @@ app.get('/messages/:userId1/:userId2', async (req, res) => {
 app.post('/upload-audio', upload.single('audio'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+    console.log('Upload received, cloud:', process.env.CLOUDINARY_CLOUD_NAME, 'size:', req.file.size);
     const stream = cloudinary.uploader.upload_stream(
       { resource_type: 'auto', folder: 'kamba-media' },
       (error, result) => {
-        if (error) return res.status(500).json({ error: 'Upload failed' });
+        if (error) { console.error('Cloudinary error:', JSON.stringify(error)); return res.status(500).json({ error: error.message }); }
+        console.log('Upload success:', result.secure_url);
         res.json({ url: result.secure_url });
       }
     );
     Readable.from(req.file.buffer).pipe(stream);
-  } catch (err) { res.status(500).json({ error: 'Server error' }); }
+  } catch (err) { console.error('Upload error:', err); res.status(500).json({ error: 'Server error' }); }
 });
 
 io.on('connection', (socket) => {
