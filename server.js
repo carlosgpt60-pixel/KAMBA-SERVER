@@ -11,7 +11,6 @@ const app = express();
 app.use(cors({ origin: '*', credentials: true }));
 app.use(express.json());
 
-// Cloudinary config
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
   api_key: process.env.CLOUDINARY_API_KEY,
@@ -26,30 +25,12 @@ const pool = new Pool({
 });
 
 async function initDB() {
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS users (
-      id SERIAL PRIMARY KEY,
-      name TEXT NOT NULL,
-      phone TEXT UNIQUE NOT NULL,
-      user_id TEXT UNIQUE NOT NULL,
-      created_at TIMESTAMP DEFAULT NOW()
-    )
-  `);
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS messages (
-      id SERIAL PRIMARY KEY,
-      from_user TEXT NOT NULL,
-      to_user TEXT NOT NULL,
-      text TEXT NOT NULL,
-      time TEXT NOT NULL,
-      type TEXT DEFAULT 'text',
-      created_at TIMESTAMP DEFAULT NOW()
-    )
-  `);
+  await pool.query(`CREATE TABLE IF NOT EXISTS users (id SERIAL PRIMARY KEY, name TEXT NOT NULL, phone TEXT UNIQUE NOT NULL, user_id TEXT UNIQUE NOT NULL, created_at TIMESTAMP DEFAULT NOW())`);
+  await pool.query(`CREATE TABLE IF NOT EXISTS messages (id SERIAL PRIMARY KEY, from_user TEXT NOT NULL, to_user TEXT NOT NULL, text TEXT NOT NULL, time TEXT NOT NULL, type TEXT DEFAULT 'text', created_at TIMESTAMP DEFAULT NOW())`);
   try { await pool.query(`ALTER TABLE messages ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'sent'`); } catch(e) {}
   try { await pool.query(`ALTER TABLE messages ADD COLUMN IF NOT EXISTS type TEXT DEFAULT 'text'`); } catch(e) {}
   try { await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS pin TEXT`); } catch(e) {}
-  console.log('Database ready!');
+  console.log('Database ready! v3');
 }
 
 initDB();
@@ -64,13 +45,12 @@ const io = new Server(server, {
 const onlineUsers = {};
 
 app.post('/register', async (req, res) => {
-  const { name, phone } = req.body;
+  const { name, phone, pin } = req.body;
   if (!name || !phone) return res.status(400).json({ error: 'Name and phone required' });
+  if (!pin || pin.length !== 4) return res.status(400).json({ error: 'PIN deve ter 4 dígitos' });
+  if (!/^\d{4}$/.test(pin)) return res.status(400).json({ error: 'PIN deve ter 4 números' });
   const userId = 'user_' + Math.random().toString(36).substr(2, 8);
   try {
-    const { pin } = req.body;
-    if (!pin || pin.length !== 4) return res.status(400).json({ error: 'PIN deve ter 4 dígitos' });
-    if (!/^\d{4}$/.test(pin)) return res.status(400).json({ error: 'PIN deve ter 4 números' });
     const existing = await pool.query('SELECT * FROM users WHERE phone = $1', [phone]);
     if (existing.rows.length > 0) {
       if (existing.rows[0].pin && existing.rows[0].pin !== pin) return res.status(401).json({ error: 'PIN incorreto' });
@@ -81,42 +61,22 @@ app.post('/register', async (req, res) => {
     res.json({ user: result.rows[0] });
   } catch (err) { console.error(err); res.status(500).json({ error: 'Server error' }); }
 });
+
 app.post('/save-contact', async (req, res) => {
   const { userId, contactId, name } = req.body;
   try {
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS contacts (
-        id SERIAL PRIMARY KEY,
-        user_id TEXT NOT NULL,
-        contact_id TEXT NOT NULL,
-        name TEXT NOT NULL,
-        UNIQUE(user_id, contact_id)
-      )
-    `);
-    await pool.query(`
-      INSERT INTO contacts (user_id, contact_id, name) 
-      VALUES ($1, $2, $3) 
-      ON CONFLICT (user_id, contact_id) DO UPDATE SET name = $3
-    `, [userId, contactId, name]);
+    await pool.query(`CREATE TABLE IF NOT EXISTS contacts (id SERIAL PRIMARY KEY, user_id TEXT NOT NULL, contact_id TEXT NOT NULL, name TEXT NOT NULL, UNIQUE(user_id, contact_id))`);
+    await pool.query(`INSERT INTO contacts (user_id, contact_id, name) VALUES ($1, $2, $3) ON CONFLICT (user_id, contact_id) DO UPDATE SET name = $3`, [userId, contactId, name]);
     res.json({ success: true });
   } catch (err) { console.error(err); res.status(500).json({ error: 'Server error' }); }
 });
+
 app.get('/conversations/:userId', async (req, res) => {
   try {
     const userId = req.params.userId;
-    const result = await pool.query(`
-      SELECT CASE WHEN from_user = $1 THEN to_user ELSE from_user END as other_user,
-        text as last_message, time, type
-      FROM messages
-      WHERE from_user = $1 OR to_user = $1
-      ORDER BY created_at DESC
-    `, [userId]);
+    const result = await pool.query(`SELECT CASE WHEN from_user = $1 THEN to_user ELSE from_user END as other_user, text as last_message, time, type FROM messages WHERE from_user = $1 OR to_user = $1 ORDER BY created_at DESC`, [userId]);
     const seen = new Set();
-    const unique = result.rows.filter(row => {
-      if (seen.has(row.other_user)) return false;
-      seen.add(row.other_user);
-      return true;
-    });
+    const unique = result.rows.filter(row => { if (seen.has(row.other_user)) return false; seen.add(row.other_user); return true; });
     const contacts = await Promise.all(unique.map(async (row) => {
       const user = await pool.query('SELECT name, phone, user_id FROM users WHERE user_id = $1', [row.other_user]);
       if (user.rows.length === 0) return null;
@@ -127,6 +87,7 @@ app.get('/conversations/:userId', async (req, res) => {
     res.json({ contacts: contacts.filter(Boolean) });
   } catch (err) { console.error(err); res.status(500).json({ error: 'Server error' }); }
 });
+
 app.get('/user/:userId', async (req, res) => {
   try {
     const result = await pool.query('SELECT id, name, phone, user_id FROM users WHERE user_id = $1', [req.params.userId]);
@@ -134,6 +95,7 @@ app.get('/user/:userId', async (req, res) => {
     res.json({ user: result.rows[0] });
   } catch (err) { res.status(500).json({ error: 'Server error' }); }
 });
+
 app.get('/search/:phone', async (req, res) => {
   try {
     const result = await pool.query('SELECT id, name, phone, user_id FROM users WHERE phone = $1', [req.params.phone]);
@@ -145,15 +107,11 @@ app.get('/search/:phone', async (req, res) => {
 app.get('/messages/:userId1/:userId2', async (req, res) => {
   const { userId1, userId2 } = req.params;
   try {
-    const result = await pool.query(
-      `SELECT * FROM messages WHERE (from_user = $1 AND to_user = $2) OR (from_user = $2 AND to_user = $1) ORDER BY created_at ASC`,
-      [userId1, userId2]
-    );
+    const result = await pool.query(`SELECT * FROM messages WHERE (from_user = $1 AND to_user = $2) OR (from_user = $2 AND to_user = $1) ORDER BY created_at ASC`, [userId1, userId2]);
     res.json({ messages: result.rows });
   } catch (err) { res.status(500).json({ error: 'Server error' }); }
 });
 
-// Upload audio
 app.post('/upload-audio', upload.single('audio'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
@@ -170,6 +128,8 @@ app.post('/upload-audio', upload.single('audio'), async (req, res) => {
   } catch (err) { console.error('Upload error:', err); res.status(500).json({ error: 'Server error' }); }
 });
 
+app.get('/', (req, res) => res.send('Kamba server running!'));
+
 io.on('connection', (socket) => {
   console.log('Connected:', socket.id);
 
@@ -182,10 +142,7 @@ io.on('connection', (socket) => {
     const { to, from, text, time, msgId, type } = data;
     const msgType = type || 'text';
     try {
-      const result = await pool.query(
-        'INSERT INTO messages (from_user, to_user, text, time, status, type) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id',
-        [from, to, text, time, 'sent', msgType]
-      );
+      const result = await pool.query('INSERT INTO messages (from_user, to_user, text, time, status, type) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id', [from, to, text, time, 'sent', msgType]);
       const dbId = result.rows[0].id;
       const recipientSocket = onlineUsers[to];
       if (recipientSocket) {
@@ -206,14 +163,38 @@ io.on('connection', (socket) => {
     } catch (err) { console.error('Error:', err); }
   });
 
+  socket.on('call_offer', (data) => {
+    const { to, from, offer, callerName } = data;
+    const recipientSocket = onlineUsers[to];
+    console.log(`📞 Call from ${from} to ${to}, recipient: ${recipientSocket}`);
+    if (recipientSocket) io.to(recipientSocket).emit('incoming_call', { from, offer, callerName });
+    else console.log('❌ Recipient not online:', to);
+  });
+
+  socket.on('call_answer', (data) => {
+    const { to, answer } = data;
+    const recipientSocket = onlineUsers[to];
+    if (recipientSocket) io.to(recipientSocket).emit('call_answered', { answer });
+  });
+
+  socket.on('call_ice', (data) => {
+    const { to, candidate } = data;
+    const recipientSocket = onlineUsers[to];
+    if (recipientSocket) io.to(recipientSocket).emit('call_ice', { candidate });
+  });
+
+  socket.on('call_end', (data) => {
+    const { to } = data;
+    const recipientSocket = onlineUsers[to];
+    if (recipientSocket) io.to(recipientSocket).emit('call_ended');
+  });
+
   socket.on('disconnect', () => {
     for (const [userId, socketId] of Object.entries(onlineUsers)) {
       if (socketId === socket.id) { delete onlineUsers[userId]; break; }
     }
   });
 });
-
-app.get('/', (req, res) => res.send('Kamba server running!'));
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => console.log('Kamba server running on port', PORT));
