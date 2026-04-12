@@ -28,6 +28,7 @@ async function initDB() {
   await pool.query(`CREATE TABLE IF NOT EXISTS users (id SERIAL PRIMARY KEY, name TEXT NOT NULL, phone TEXT UNIQUE NOT NULL, user_id TEXT UNIQUE NOT NULL, created_at TIMESTAMP DEFAULT NOW())`);
   await pool.query(`CREATE TABLE IF NOT EXISTS messages (id SERIAL PRIMARY KEY, from_user TEXT NOT NULL, to_user TEXT NOT NULL, text TEXT NOT NULL, time TEXT NOT NULL, type TEXT DEFAULT 'text', created_at TIMESTAMP DEFAULT NOW())`);
   try { await pool.query(`ALTER TABLE messages ADD COLUMN IF NOT EXISTS reply_to JSONB`); } catch(e) {}
+  try { await pool.query(`ALTER TABLE messages ADD COLUMN IF NOT EXISTS forwarded BOOLEAN DEFAULT false`); } catch(e) {}
   try { await pool.query(`ALTER TABLE messages ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'sent'`); } catch(e) {}
   try { await pool.query(`ALTER TABLE messages ADD COLUMN IF NOT EXISTS type TEXT DEFAULT 'text'`); } catch(e) {}
   try { await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS pin TEXT`); } catch(e) {}
@@ -143,11 +144,11 @@ io.on('connection', (socket) => {
     const { to, from, text, time, msgId, type } = data;
     const msgType = type || 'text';
     try {
-      const result = await pool.query('INSERT INTO messages (from_user, to_user, text, time, status, type, reply_to) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id', [from, to, text, time, 'sent', msgType, data.replyTo ? JSON.stringify(data.replyTo) : null]);
+      const result = await pool.query('INSERT INTO messages (from_user, to_user, text, time, status, type, reply_to, forwarded) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id', [from, to, text, time, 'sent', msgType, data.replyTo ? JSON.stringify(data.replyTo) : null, data.forwarded || false]);
       const dbId = result.rows[0].id;
       const recipientSocket = onlineUsers[to];
       if (recipientSocket) {
-        io.to(recipientSocket).emit('receive_message', { from, text, time, msgId: dbId, type: msgType, replyTo: data.replyTo || null });
+        io.to(recipientSocket).emit('receive_message', { from, text, time, msgId: dbId, type: msgType, replyTo: data.replyTo || null, forwarded: data.forwarded || false });
         await pool.query('UPDATE messages SET status = $1 WHERE id = $2', ['delivered', dbId]);
         const senderSocket = onlineUsers[from];
         if (senderSocket) io.to(senderSocket).emit('message_status', { msgId, status: 'delivered' });
