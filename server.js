@@ -58,7 +58,22 @@ app.post('/register', async (req, res) => {
     if (existing.rows.length > 0) {
       if (existing.rows[0].pin && existing.rows[0].pin !== pin) return res.status(401).json({ error: 'PIN incorreto' });
       if (!existing.rows[0].pin) await pool.query('UPDATE users SET pin = $1 WHERE phone = $2', [pin, phone]);
-      return res.json({ user: existing.rows[0] });
+      let kambaUser = null;
+      if (!existing.rows[0].kamba_number) {
+        const part1 = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
+        const part2 = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
+        const kambaNumber = part1 + ' ' + part2;
+        const kambaUserId = 'kamba_' + Math.random().toString(36).substr(2, 8);
+        await pool.query('UPDATE users SET kamba_number = $1 WHERE phone = $2', [kambaNumber, phone]);
+        await pool.query('INSERT INTO users (name, phone, user_id, pin) VALUES ($1, $2, $3, $4) ON CONFLICT (phone) DO NOTHING', [existing.rows[0].name, kambaNumber, kambaUserId, pin]);
+        const updatedUser = await pool.query('SELECT * FROM users WHERE phone = $1', [phone]);
+        const kambaUserResult = await pool.query('SELECT * FROM users WHERE phone = $1', [kambaNumber]);
+        kambaUser = kambaUserResult.rows[0] || null;
+        return res.json({ user: updatedUser.rows[0], kambaUser });
+      }
+      const kambaUserResult = await pool.query('SELECT * FROM users WHERE phone = $1', [existing.rows[0].kamba_number]);
+      kambaUser = kambaUserResult.rows[0] || null;
+      return res.json({ user: existing.rows[0], kambaUser });
     }
     const part1 = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
     const part2 = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
