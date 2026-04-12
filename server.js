@@ -32,6 +32,7 @@ async function initDB() {
   try { await pool.query(`ALTER TABLE messages ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'sent'`); } catch(e) {}
   try { await pool.query(`ALTER TABLE messages ADD COLUMN IF NOT EXISTS type TEXT DEFAULT 'text'`); } catch(e) {}
   try { await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS pin TEXT`); } catch(e) {}
+  try { await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS kamba_number TEXT`); } catch(e) {}
   console.log('Database ready! v3');
 }
 
@@ -59,7 +60,10 @@ app.post('/register', async (req, res) => {
       if (!existing.rows[0].pin) await pool.query('UPDATE users SET pin = $1 WHERE phone = $2', [pin, phone]);
       return res.json({ user: existing.rows[0] });
     }
-    const result = await pool.query('INSERT INTO users (name, phone, user_id, pin) VALUES ($1, $2, $3, $4) RETURNING *', [name, phone, userId, pin]);
+    const part1 = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
+    const part2 = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
+    const kambaNumber = part1 + ' ' + part2;
+    const result = await pool.query('INSERT INTO users (name, phone, user_id, pin, kamba_number) VALUES ($1, $2, $3, $4, $5) RETURNING *', [name, phone, userId, pin, kambaNumber]);
     res.json({ user: result.rows[0] });
   } catch (err) { console.error(err); res.status(500).json({ error: 'Server error' }); }
 });
