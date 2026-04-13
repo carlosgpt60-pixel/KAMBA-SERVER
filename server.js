@@ -123,7 +123,8 @@ app.get('/user/:userId', async (req, res) => {
 app.get('/search/:phone', async (req, res) => {
   try {
     const phone = decodeURIComponent(req.params.phone);
-    const result = await pool.query('SELECT id, name, phone, user_id FROM users WHERE phone = $1', [phone]);
+    const phoneWithSpace = phone.length === 6 ? phone.slice(0,3) + ' ' + phone.slice(3) : phone;
+    const result = await pool.query('SELECT id, name, phone, user_id FROM users WHERE phone = $1 OR phone = $2', [phone, phoneWithSpace]);
     if (result.rows.length === 0) return res.status(404).json({ error: 'User not found' });
     res.json({ user: result.rows[0] });
   } catch (err) { res.status(500).json({ error: 'Server error' }); }
