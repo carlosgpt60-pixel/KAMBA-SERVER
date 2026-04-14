@@ -78,11 +78,8 @@ app.post('/register', async (req, res) => {
     const part1 = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
     const part2 = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
     const kambaNumber = part1 + ' ' + part2;
-    const result = await pool.query('INSERT INTO users (name, phone, user_id, pin, kamba_number) VALUES ($1, $2, $3, $4, $5) RETURNING *', [name, phone, userId, pin, kambaNumber]);
-    const kambaUserId = 'kamba_' + Math.random().toString(36).substr(2, 8);
-    await pool.query('INSERT INTO users (name, phone, user_id, pin) VALUES ($1, $2, $3, $4) ON CONFLICT (phone) DO NOTHING', [name, kambaNumber, kambaUserId, pin]);
-    const kambaUser = await pool.query('SELECT * FROM users WHERE phone = $1', [kambaNumber]);
-    res.json({ user: result.rows[0], kambaUser: kambaUser.rows[0] });
+    const result = await pool.query('INSERT INTO users (name, phone, user_id, pin) VALUES ($1, $2, $3, $4) RETURNING *', [name, phone, userId, pin]);
+    res.json({ user: result.rows[0], kambaUser: null });
   } catch (err) { console.error(err); res.status(500).json({ error: 'Server error' }); }
 });
 
