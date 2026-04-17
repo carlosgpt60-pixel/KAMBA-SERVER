@@ -56,12 +56,7 @@ app.post('/send-code', async (req, res) => {
   const code = Math.floor(100000 + Math.random() * 900000).toString();
   verificationCodes[phone] = { code, expires: Date.now() + 10 * 60 * 1000 };
   console.log(`SMS code for ${phone}: ${code}`);
-  try {
-    // SMS temporariamente desativado
-    res.json({ success: true });
-  } catch (err) {
-    res.json({ success: true });
-  }
+  res.json({ success: true });
 });
 
 app.post('/verify-code', async (req, res) => {
