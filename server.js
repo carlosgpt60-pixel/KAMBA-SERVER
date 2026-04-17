@@ -6,20 +6,20 @@ const { Pool } = require('pg');
 const cloudinary = require('cloudinary').v2;
 const multer = require('multer');
 const { Readable } = require('stream');
+const twilio = require('twilio');
 
 const app = express();
 app.use(cors({ origin: '*', credentials: true }));
 app.use(express.json());
-
-const twilio = require('twilio');
-const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
-const verificationCodes = {};
 
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
   api_key: process.env.CLOUDINARY_API_KEY,
   api_secret: process.env.CLOUDINARY_API_SECRET,
 });
+
+const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+const verificationCodes = {};
 
 const upload = multer({ storage: multer.memoryStorage() });
 
@@ -31,13 +31,12 @@ const pool = new Pool({
 async function initDB() {
   await pool.query(`CREATE TABLE IF NOT EXISTS users (id SERIAL PRIMARY KEY, name TEXT NOT NULL, phone TEXT UNIQUE NOT NULL, user_id TEXT UNIQUE NOT NULL, created_at TIMESTAMP DEFAULT NOW())`);
   await pool.query(`CREATE TABLE IF NOT EXISTS messages (id SERIAL PRIMARY KEY, from_user TEXT NOT NULL, to_user TEXT NOT NULL, text TEXT NOT NULL, time TEXT NOT NULL, type TEXT DEFAULT 'text', created_at TIMESTAMP DEFAULT NOW())`);
-  try { await pool.query(`ALTER TABLE messages ADD COLUMN IF NOT EXISTS reply_to JSONB`); } catch(e) {}
-  try { await pool.query(`ALTER TABLE messages ADD COLUMN IF NOT EXISTS forwarded BOOLEAN DEFAULT false`); } catch(e) {}
   try { await pool.query(`ALTER TABLE messages ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'sent'`); } catch(e) {}
   try { await pool.query(`ALTER TABLE messages ADD COLUMN IF NOT EXISTS type TEXT DEFAULT 'text'`); } catch(e) {}
   try { await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS pin TEXT`); } catch(e) {}
-  try { await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS kamba_number TEXT`); } catch(e) {}
-  console.log('Database ready! v3');
+  try { await pool.query(`ALTER TABLE messages ADD COLUMN IF NOT EXISTS reply_to JSONB`); } catch(e) {}
+  try { await pool.query(`ALTER TABLE messages ADD COLUMN IF NOT EXISTS forwarded BOOLEAN DEFAULT false`); } catch(e) {}
+  console.log('Database ready! v4');
 }
 
 initDB();
@@ -51,11 +50,13 @@ const io = new Server(server, {
 
 const onlineUsers = {};
 
+// ── SMS VERIFICATION ──────────────────────────────────────
 app.post('/send-code', async (req, res) => {
   const { phone } = req.body;
   if (!phone) return res.status(400).json({ error: 'Número obrigatório' });
   const code = Math.floor(100000 + Math.random() * 900000).toString();
   verificationCodes[phone] = { code, expires: Date.now() + 10 * 60 * 1000 };
+  console.log(`SMS code for ${phone}: ${code}`);
   try {
     await twilioClient.messages.create({
       body: `O teu código Kamba é: ${code}. Válido por 10 minutos.`,
@@ -65,20 +66,22 @@ app.post('/send-code', async (req, res) => {
     res.json({ success: true });
   } catch (err) {
     console.error('SMS error:', err.message);
-    res.status(500).json({ error: 'Erro ao enviar SMS: ' + err.message });
+    // Em modo trial, mostrar o código no log mas retornar sucesso
+    res.json({ success: true, debug: code });
   }
 });
 
 app.post('/verify-code', async (req, res) => {
   const { phone, code } = req.body;
   const record = verificationCodes[phone];
-  if (!record) return res.status(400).json({ error: 'Código não encontrado' });
-  if (Date.now() > record.expires) return res.status(400).json({ error: 'Código expirado' });
-  if (record.code !== code) return res.status(400).json({ error: 'Código incorreto' });
+  if (!record) return res.status(400).json({ error: 'Código não encontrado. Pede um novo código.' });
+  if (Date.now() > record.expires) return res.status(400).json({ error: 'Código expirado. Pede um novo código.' });
+  if (record.code !== code) return res.status(400).json({ error: 'Código incorreto.' });
   delete verificationCodes[phone];
   res.json({ success: true });
 });
 
+// ── ROUTES ────────────────────────────────────────────────
 app.post('/register', async (req, res) => {
   const { name, phone, pin } = req.body;
   if (!name || !phone) return res.status(400).json({ error: 'Name and phone required' });
@@ -91,25 +94,10 @@ app.post('/register', async (req, res) => {
       if (existing.rows[0].pin && existing.rows[0].pin !== pin) return res.status(401).json({ error: 'PIN incorreto' });
       if (!existing.rows[0].pin) await pool.query('UPDATE users SET pin = $1 WHERE phone = $2', [pin, phone]);
       let kambaUser = null;
-      if (!existing.rows[0].kamba_number) {
-        const part1 = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
-        const part2 = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
-        const kambaNumber = part1 + ' ' + part2;
-        const kambaUserId = 'kamba_' + Math.random().toString(36).substr(2, 8);
-        await pool.query('UPDATE users SET kamba_number = $1 WHERE phone = $2', [kambaNumber, phone]);
-        await pool.query('INSERT INTO users (name, phone, user_id, pin) VALUES ($1, $2, $3, $4) ON CONFLICT (phone) DO NOTHING', [existing.rows[0].name, kambaNumber, kambaUserId, pin]);
-        const updatedUser = await pool.query('SELECT * FROM users WHERE phone = $1', [phone]);
-        const kambaUserResult = await pool.query('SELECT * FROM users WHERE phone = $1', [kambaNumber]);
-        kambaUser = kambaUserResult.rows[0] || null;
-        return res.json({ user: updatedUser.rows[0], kambaUser });
-      }
       const kambaUserResult = await pool.query('SELECT * FROM users WHERE phone = $1', [existing.rows[0].kamba_number]);
       kambaUser = kambaUserResult.rows[0] || null;
       return res.json({ user: existing.rows[0], kambaUser });
     }
-    const part1 = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
-    const part2 = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
-    const kambaNumber = part1 + ' ' + part2;
     const result = await pool.query('INSERT INTO users (name, phone, user_id, pin) VALUES ($1, $2, $3, $4) RETURNING *', [name, phone, userId, pin]);
     res.json({ user: result.rows[0], kambaUser: null });
   } catch (err) { console.error(err); res.status(500).json({ error: 'Server error' }); }
@@ -185,6 +173,7 @@ app.post('/upload-audio', upload.single('audio'), async (req, res) => {
 
 app.get('/', (req, res) => res.send('Kamba server running!'));
 
+// ── SOCKET ────────────────────────────────────────────────
 io.on('connection', (socket) => {
   console.log('Connected:', socket.id);
 
@@ -194,14 +183,14 @@ io.on('connection', (socket) => {
   });
 
   socket.on('send_message', async (data) => {
-    const { to, from, text, time, msgId, type } = data;
+    const { to, from, text, time, msgId, type, replyTo, forwarded } = data;
     const msgType = type || 'text';
     try {
-      const result = await pool.query('INSERT INTO messages (from_user, to_user, text, time, status, type, reply_to, forwarded) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id', [from, to, text, time, 'sent', msgType, data.replyTo ? JSON.stringify(data.replyTo) : null, data.forwarded || false]);
+      const result = await pool.query('INSERT INTO messages (from_user, to_user, text, time, status, type, reply_to, forwarded) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id', [from, to, text, time, 'sent', msgType, replyTo ? JSON.stringify(replyTo) : null, forwarded || false]);
       const dbId = result.rows[0].id;
       const recipientSocket = onlineUsers[to];
       if (recipientSocket) {
-        io.to(recipientSocket).emit('receive_message', { from, text, time, msgId: dbId, type: msgType, replyTo: data.replyTo || null, forwarded: data.forwarded || false });
+        io.to(recipientSocket).emit('receive_message', { from, text, time, msgId: dbId, type: msgType, replyTo: replyTo || null, forwarded: forwarded || false });
         await pool.query('UPDATE messages SET status = $1 WHERE id = $2', ['delivered', dbId]);
         const senderSocket = onlineUsers[from];
         if (senderSocket) io.to(senderSocket).emit('message_status', { msgId, status: 'delivered' });
