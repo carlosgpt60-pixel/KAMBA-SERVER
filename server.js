@@ -18,8 +18,10 @@ cloudinary.config({
   api_secret: process.env.CLOUDINARY_API_SECRET,
 });
 
-const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
 const verificationCodes = {};
+function getTwilioClient() {
+  return twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+}
 
 const upload = multer({ storage: multer.memoryStorage() });
 
@@ -58,7 +60,7 @@ app.post('/send-code', async (req, res) => {
   verificationCodes[phone] = { code, expires: Date.now() + 10 * 60 * 1000 };
   console.log(`SMS code for ${phone}: ${code}`);
   try {
-    await twilioClient.messages.create({
+    await getTwilioClient().messages.create({
       body: `O teu código Kamba é: ${code}. Válido por 10 minutos.`,
       from: process.env.TWILIO_PHONE,
       to: '+244' + phone.replace(/\D/g, '')
