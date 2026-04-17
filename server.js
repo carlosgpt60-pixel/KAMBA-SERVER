@@ -11,6 +11,10 @@ const app = express();
 app.use(cors({ origin: '*', credentials: true }));
 app.use(express.json());
 
+const twilio = require('twilio');
+const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+const verificationCodes = {};
+
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
   api_key: process.env.CLOUDINARY_API_KEY,
@@ -46,6 +50,34 @@ const io = new Server(server, {
 });
 
 const onlineUsers = {};
+
+app.post('/send-code', async (req, res) => {
+  const { phone } = req.body;
+  if (!phone) return res.status(400).json({ error: 'Número obrigatório' });
+  const code = Math.floor(100000 + Math.random() * 900000).toString();
+  verificationCodes[phone] = { code, expires: Date.now() + 10 * 60 * 1000 };
+  try {
+    await twilioClient.messages.create({
+      body: `O teu código Kamba é: ${code}. Válido por 10 minutos.`,
+      from: process.env.TWILIO_PHONE,
+      to: '+244' + phone.replace(/\D/g, '')
+    });
+    res.json({ success: true });
+  } catch (err) {
+    console.error('SMS error:', err.message);
+    res.status(500).json({ error: 'Erro ao enviar SMS: ' + err.message });
+  }
+});
+
+app.post('/verify-code', async (req, res) => {
+  const { phone, code } = req.body;
+  const record = verificationCodes[phone];
+  if (!record) return res.status(400).json({ error: 'Código não encontrado' });
+  if (Date.now() > record.expires) return res.status(400).json({ error: 'Código expirado' });
+  if (record.code !== code) return res.status(400).json({ error: 'Código incorreto' });
+  delete verificationCodes[phone];
+  res.json({ success: true });
+});
 
 app.post('/register', async (req, res) => {
   const { name, phone, pin } = req.body;
