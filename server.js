@@ -19,6 +19,7 @@ cloudinary.config({
 });
 
 const verificationCodes = {};
+const twilio = require('twilio');
 
 const upload = multer({ storage: multer.memoryStorage() });
 
@@ -35,6 +36,7 @@ async function initDB() {
   try { await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS pin TEXT`); } catch(e) {}
   try { await pool.query(`ALTER TABLE messages ADD COLUMN IF NOT EXISTS reply_to JSONB`); } catch(e) {}
   try { await pool.query(`ALTER TABLE messages ADD COLUMN IF NOT EXISTS forwarded BOOLEAN DEFAULT false`); } catch(e) {}
+  try { await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS kamba_number TEXT`); } catch(e) {}
   console.log('Database ready! v4');
 }
 
@@ -56,6 +58,16 @@ app.post('/send-code', async (req, res) => {
   const code = Math.floor(100000 + Math.random() * 900000).toString();
   verificationCodes[phone] = { code, expires: Date.now() + 10 * 60 * 1000 };
   console.log(`SMS code for ${phone}: ${code}`);
+  try {
+    const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+    await client.messages.create({
+      body: `O teu código Kamba é: ${code}. Válido por 10 minutos.`,
+      from: process.env.TWILIO_PHONE,
+      to: '+244' + phone.replace(/\D/g, '')
+    });
+  } catch (err) {
+    console.error('SMS error:', err.message);
+  }
   res.json({ success: true });
 });
 
