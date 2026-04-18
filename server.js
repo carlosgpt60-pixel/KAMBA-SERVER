@@ -103,6 +103,14 @@ app.post('/register', async (req, res) => {
   } catch (err) { console.error(err); res.status(500).json({ error: 'Server error' }); }
 });
 
+app.post('/link-kamba', async (req, res) => {
+  const { userId, kambaPhone } = req.body;
+  try {
+    await pool.query('UPDATE users SET kamba_number = $1 WHERE user_id = $2', [kambaPhone, userId]);
+    res.json({ success: true });
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Server error' }); }
+});
+
 app.post('/save-contact', async (req, res) => {
   const { userId, contactId, name } = req.body;
   try {
